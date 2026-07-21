@@ -1,0 +1,37 @@
+[
+    {
+        "ticket_id": "ZM-101",
+        "customer_name": "Rahul Sharma",
+        "timestamp": "2026-07-15T12:00:00Z",
+        "issue_category": "Refund Issue",
+        "transcript": "Customer: I ordered food 2 hours ago and I was supposed to get a refund because the restaurant was closed. Executive: I apologize for the inconvenience, sir. I'm checking on the status of your refund. Can you please provide me with your order number? Customer: It's #ZN-1234. Executive: Thank you, sir. I've checked and the refund has been initiated. You should receive it within 3-5 working days."
+    },
+    {
+        "ticket_id": "ZM-102",
+        "customer_name": "Priya Jain",
+        "timestamp": "2026-07-15T13:00:00Z",
+        "issue_category": "Coupon Issue",
+        "transcript": "Customer: I'm trying to use the coupon code ZOM10 but it's not working. Executive: I apologize for the issue, ma'am. Can you please tell me more about the coupon code and the error message you're receiving? Customer: It says 'coupon code is invalid'. Executive: I've checked and the coupon code is valid. Can you please try again and make sure you're entering the correct code?"
+    },
+    {
+        "ticket_id": "ZM-103",
+        "customer_name": "Karan Singh",
+        "timestamp": "2026-07-15T14:00:00Z",
+        "issue_category": "Food Quality Issue",
+        "transcript": "Customer: The food I received was spilled all over the box. Executive: I apologize for the inconvenience, sir. That's not the kind of experience we want to provide. Can you please provide me with your order number so I can look into this further? Customer: It's #ZN-5678. Executive: Thank you, sir. I've checked and I'm going to go ahead and provide you with a replacement order and a refund for the inconvenience caused."
+    },
+    {
+        "ticket_id": "ZM-104",
+        "customer_name": "Sonia Gupta",
+        "timestamp": "2026-07-15T15:00:00Z",
+        "issue_category": "Order Issue",
+        "transcript": "Customer: I ordered a veg biryani but I received a chicken biryani instead. Executive: I apologize for the mistake, ma'am. That's not what we want to happen. Can you please provide me with your order number so I can look into this further? Customer: It's #ZN-9012. Executive: Thank you, ma'am. I've checked and I'm going to go ahead and provide you with a replacement order with the correct item and a refund for the inconvenience caused."
+    },
+    {
+        "ticket_id": "ZM-105",
+        "customer_name": "Rajesh Kumar",
+        "timestamp": "2026-07-15T16:00:00Z",
+        "issue_category": "Refund Issue",
+        "transcript": "Customer: I was supposed to get a refund for my cancelled order but I haven't received it yet. Executive: I apologize for the delay, sir. Can you please provide me with your order number so I can check on the status of your refund? Customer: It's #ZN-1111. Executive: Thank you, sir. I've checked and the refund has been initiated. You should receive it within 3-5 working days. If you don't receive it by then, please let us know and we'll look into it further."
+    }
+]

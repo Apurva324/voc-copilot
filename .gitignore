@@ -1,0 +1,25 @@
+# Environment & Secrets
+.env
+*.env
+.env.local
+
+# Python Build & Cache
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Node & Next.js Build Artifacts
+node_modules/
+.next/
+out/
+
+# IDE / System
+.DS_Store
+.vscode/
+
+# Local Data Storage (Keep folder structure using .gitkeep if desired)
+Backend/Data/Raw/*
+Backend/Data/Processed/*
+!Backend/Data/Raw/.gitkeep
+!Backend/Data/Processed/.gitkeep
