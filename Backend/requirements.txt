@@ -1,4 +1,4 @@
-# Web Framework & Server
+# Server & API Framework
 fastapi
 uvicorn
 python-multipart
@@ -7,15 +7,22 @@ python-multipart
 pymongo
 python-dotenv
 
-# Authentication & Security
+# Authentication & Tokens
 passlib
 bcrypt
 python-jose[cryptography]
 
-# Data Processing & File Handling
+# Data Processing
 pandas
 numpy
 openpyxl
 
-# AI & Vector Store Ingestion
+# Web Scraping & Ingestion
+requests
+beautifulsoup4
+
+# Machine Learning & AI
+sentence-transformers
+torch
+scikit-learn
 google-genai
