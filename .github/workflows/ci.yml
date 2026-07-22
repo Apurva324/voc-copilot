@@ -1,0 +1,30 @@
+name: CI/CD Build Check
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: actions/docker-buildx-action@v3
+
+      - name: Build Docker Compose Stack
+        run: |
+          docker compose build
+
+      - name: Verify Backend Docker Build
+        run: |
+          docker build -t voc-backend ./Backend
+
+      - name: Verify Frontend Docker Build
+        run: |
+          docker build -t voc-frontend ./frontend
