@@ -6,6 +6,8 @@ interface LoginPageProps {
   onLoginSuccess: (user: { name: string; email: string }) => void;
 }
 
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+
 export default function LoginPage({ onLoginSuccess }: LoginPageProps) {
   const [isRegister, setIsRegister] = useState(false);
   const [formData, setFormData] = useState({ name: '', email: '', password: '' });
@@ -19,8 +21,7 @@ export default function LoginPage({ onLoginSuccess }: LoginPageProps) {
 
     try {
       if (isRegister) {
-        // Explicit IPv4 loopback to match FastAPI server host
-        const res = await fetch('http://127.0.0.1:8000/api/auth/register', {
+        const res = await fetch(`${API_BASE_URL}/api/auth/register`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(formData),
@@ -35,8 +36,7 @@ export default function LoginPage({ onLoginSuccess }: LoginPageProps) {
         bodyData.append('username', formData.email);
         bodyData.append('password', formData.password);
 
-        // Explicit IPv4 loopback to match FastAPI server host
-        const res = await fetch('http://127.0.0.1:8000/api/auth/login', {
+        const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           body: bodyData,
