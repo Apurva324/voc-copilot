@@ -10,7 +10,7 @@ services:
     ports:
       - "8000:8000"
     env_file:
-      - .env
+      - ./.env
     volumes:
       # Optional: Persist local file uploads across restarts
       - ./Backend/Data/Raw:/app/Data/Raw
