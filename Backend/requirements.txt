@@ -1,9 +1,21 @@
+# Web Framework & Server
 fastapi
 uvicorn
+python-multipart
+
+# Database & Environment
 pymongo
 python-dotenv
-pandas
-numpy
+
+# Authentication & Security
 passlib
 bcrypt
 python-jose[cryptography]
+
+# Data Processing & File Handling
+pandas
+numpy
+openpyxl
+
+# AI & Vector Store Ingestion
+google-genai
