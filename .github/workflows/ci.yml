@@ -15,16 +15,12 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: actions/docker-buildx-action@v3
+        uses: docker/setup-buildx-action@v3
 
-      - name: Build Docker Compose Stack
-        run: |
-          docker compose build
-
-      - name: Verify Backend Docker Build
+      - name: Build Backend Container
         run: |
           docker build -t voc-backend ./Backend
 
-      - name: Verify Frontend Docker Build
+      - name: Build Frontend Container
         run: |
           docker build -t voc-frontend ./frontend
