@@ -21,16 +21,15 @@ app = FastAPI(title="Zomato VoC Copilot API")
 origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
-    "http://localhost:8000",
-    "http://127.0.0.1:8000",
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,       # Explicitly allow Next.js origins
-    allow_credentials=True,      # Required for tokens/cookies
-    allow_methods=["*"],         # Allows GET, POST, OPTIONS, etc.
-    allow_headers=["*"],         # Allows Content-Type, Authorization, etc.
+    allow_origins=origins,
+    allow_origin_regex=r"https://voc-copilot.*\.vercel\.app",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Register authentication routes under /api/auth
