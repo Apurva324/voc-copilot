@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+pymongo
+python-dotenv
+pandas
+numpy
+passlib
+python-jose[cryptography]
