@@ -203,95 +203,50 @@ def process_single_file(file_path):
         return
 
     # =====================================================================
-    # STAGE 2 & 5: GEMINI ANALYSIS VIA CHUNKED BATCH CALLS
+    # STAGE 2 & 5: GEMINI ANALYSIS EXCLUSIVELY VIA INDEX-BASED MAPPING
     # =====================================================================
-    # A single prompt containing thousands of reviews doesn't scale - it risks
-    # hitting context/token limits, is fragile (one failure loses everything),
-    # and LLMs return more reliable structured JSON on smaller batches.
-    # Instead, we chunk the unique reviews and call Gemini once per chunk,
-    # then stitch all the results back together in original order.
-    import time
-
     pure_texts = [r["feedback_text"] for r in unique_anchors]
+    
+    prompt = """
+    You are an AI customer analytics system for a logistics and food delivery platform.
+    Analyze the following array of UNIQUE customer reviews.
+    
+    For each review item, dynamically determine and extract:
+    1. "category": A specific operational theme classification (e.g., 'Delivery Delays', 'Refund Tracking', 'Payment Errors', 'App Crashes', 'Food Integrity'). Do not use generic answers like 'Customer Support'.
+    2. "sentiment": Analyze the raw emotional tone. Must be exactly one of: 'Positive', 'Neutral', or 'Negative'.
+    3. "churn": Mark 'High Risk' if the text explicitly or implicitly mentions switching to competitors, uninstalling the app, or never ordering again. Otherwise, mark 'Low Risk'.
+    4. "quote": Extract the most impactful exact phrase from the review text representing the core issue.
+    5. "recommendation": Provide a specific, actionable product or operational recommendation to resolve this exact issue.
+    
+    Return a valid JSON array matching the EXACT length and sequential index order of the input array.
+    Never output markdown code wrappers (like ```json), explanations, or custom text outside this layout:
+    [
+      {
+        "category": "Theme Name",
+        "sentiment": "Positive/Neutral/Negative",
+        "churn": "High Risk/Low Risk",
+        "quote": "Extracted user quote text piece",
+        "recommendation": "Tailored tactical solution recommendation text."
+      }
+    ]
+    
+    Data array:
+    """ + json.dumps(pure_texts)
 
-    GEMINI_BATCH_SIZE = 15   # reviews per Gemini call - keeps prompts small & reliable
-    MAX_RETRIES = 3
-
-    def build_prompt(batch_texts):
-        return """
-        You are an AI customer analytics system for a logistics and food delivery platform.
-        Analyze the following array of UNIQUE customer reviews.
-
-        For each review item, dynamically determine and extract:
-        1. "category": A specific operational theme classification (e.g., 'Delivery Delays', 'Refund Tracking', 'Payment Errors', 'App Crashes', 'Food Integrity'). Do not use generic answers like 'Customer Support'.
-        2. "sentiment": Analyze the raw emotional tone. Must be exactly one of: 'Positive', 'Neutral', or 'Negative'.
-        3. "churn": Mark 'High Risk' if the text explicitly or implicitly mentions switching to competitors, uninstalling the app, or never ordering again. Otherwise, mark 'Low Risk'.
-        4. "quote": Extract the most impactful exact phrase from the review text representing the core issue.
-        5. "recommendation": Provide a specific, actionable product or operational recommendation to resolve this exact issue.
-
-        Return a valid JSON array matching the EXACT length and sequential index order of the input array.
-        Never output markdown code wrappers (like ```json), explanations, or custom text outside this layout:
-        [
-          {
-            "category": "Theme Name",
-            "sentiment": "Positive/Neutral/Negative",
-            "churn": "High Risk/Low Risk",
-            "quote": "Extracted user quote text piece",
-            "recommendation": "Tailored tactical solution recommendation text."
-          }
-        ]
-
-        Data array:
-        """ + json.dumps(batch_texts)
-
-    def classify_chunk(batch_texts):
-        """Call Gemini for a single chunk, with retry on transient errors.
-        Falls back to neutral placeholders for this chunk only if it never
-        succeeds, so one bad chunk can't take down the whole pipeline."""
-        for attempt in range(MAX_RETRIES):
-            try:
-                response = ai_client.models.generate_content(
-                    model='gemini-3.5-flash',
-                    contents=build_prompt(batch_texts),
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        temperature=0.1
-                    ),
-                )
-                parsed = json.loads(response.text)
-                if isinstance(parsed, list) and len(parsed) == len(batch_texts):
-                    return parsed
-                print(f"⚠️ Chunk returned mismatched length ({len(parsed)} vs {len(batch_texts)}), retrying...")
-            except Exception as e:
-                is_transient = "503" in str(e) or "UNAVAILABLE" in str(e) or "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)
-                if is_transient and attempt < MAX_RETRIES - 1:
-                    delay = 2 ** attempt
-                    print(f"⚠️ Gemini chunk call failed (attempt {attempt + 1}/{MAX_RETRIES}): {e}. Retrying in {delay}s...")
-                    time.sleep(delay)
-                    continue
-                print(f"❌ Gemini chunk call failed after {attempt + 1} attempt(s): {e}")
-                break
-
-        # Fallback for just this chunk - pipeline keeps going for everything else
-        return [
-            {
-                "category": "General Support",
-                "sentiment": "Neutral",
-                "churn": "Low Risk",
-                "quote": text[:80],
-                "recommendation": "AI analysis unavailable for this batch - review manually."
-            }
-            for text in batch_texts
-        ]
-
-    ai_analysis = []
-    total_chunks = (len(pure_texts) + GEMINI_BATCH_SIZE - 1) // GEMINI_BATCH_SIZE
-    for chunk_idx, i in enumerate(range(0, len(pure_texts), GEMINI_BATCH_SIZE), start=1):
-        batch = pure_texts[i:i + GEMINI_BATCH_SIZE]
-        print(f"🚀 Processing Gemini chunk {chunk_idx}/{total_chunks} ({len(batch)} reviews)...")
-        ai_analysis.extend(classify_chunk(batch))
-
-    print(f"🚀 Gemini Dynamic Parsing Engine Analysis Complete. ({len(ai_analysis)} reviews classified across {total_chunks} chunks)")
+    try:
+        response = ai_client.models.generate_content(
+            model='gemini-3.5-flash',
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.1
+            ),
+        )
+        ai_analysis = json.loads(response.text)
+        print("🚀 Gemini Dynamic Parsing Engine Analysis Complete.")
+    except Exception as e:
+        print(f"❌ Critical Pipeline Failure: Gemini API call failed. Error: {e}")
+        raise e
 
     # =====================================================================
     # STAGE 6, 7 & 8: DASHBOARD METRICS CALCULATION
