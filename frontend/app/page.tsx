@@ -3,6 +3,9 @@
 import React, { useState, useEffect, useRef } from "react";
 import LoginPage from '@/components/LoginPage';
 
+// Base API URL with environment variable fallback
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+
 // --- Types ---
 interface FeedbackItem {
   _id?: string;
@@ -101,13 +104,13 @@ export default function Dashboard() {
 
   const fetchDashboardData = async () => {
     try {
-      const feedbackRes = await fetch("http://127.0.0.1:8000/api/feedback");
+      const feedbackRes = await fetch(`${API_BASE_URL}/api/feedback`);
       if (feedbackRes.ok) {
         const feedbackData = await feedbackRes.json();
         setFeedstock(feedbackData || []);
       }
 
-      const metricsRes = await fetch("http://127.0.0.1:8000/api/dashboard-metrics");
+      const metricsRes = await fetch(`${API_BASE_URL}/api/dashboard-metrics`);
       if (metricsRes.ok) {
         const metricsData = await metricsRes.json();
         setMetrics(metricsData);
@@ -124,7 +127,7 @@ export default function Dashboard() {
   const fetchDatasets = async () => {
     setIsLoadingDatasets(true);
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/datasets");
+      const res = await fetch(`${API_BASE_URL}/api/datasets`);
       if (res.ok) {
         const data = await res.json();
         setDatasets(data || []);
@@ -148,7 +151,7 @@ export default function Dashboard() {
     const fetchVelocityData = async () => {
       setIsLoadingVelocity(true);
       try {
-        const res = await fetch(`http://127.0.0.1:8000/api/risk-velocity?aggregation=${aggregation}`);
+        const res = await fetch(`${API_BASE_URL}/api/risk-velocity?aggregation=${aggregation}`);
         if (res.ok) {
           const data = await res.json();
           setVelocityPoints(data || []);
@@ -182,7 +185,7 @@ export default function Dashboard() {
 
     setIsUploading(true);
     try {
-      const response = await fetch("http://127.0.0.1:8000/api/upload", {
+      const response = await fetch(`${API_BASE_URL}/api/upload`, {
         method: "POST",
         body: formData,
       });
@@ -207,7 +210,7 @@ export default function Dashboard() {
     if (!confirm(`Are you sure you want to remove ${filename} from dataset history?`)) return;
 
     try {
-      const res = await fetch(`http://127.0.0.1:8000/api/datasets/${encodeURIComponent(filename)}`, {
+      const res = await fetch(`${API_BASE_URL}/api/datasets/${encodeURIComponent(filename)}`, {
         method: "DELETE",
       });
       if (res.ok) {

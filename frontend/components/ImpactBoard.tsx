@@ -1,5 +1,8 @@
 import React, { useState, useEffect } from 'react';
 
+// Base API URL with environment variable fallback
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+
 interface ThemeItem {
   theme_name: string;
   mention_count: number;
@@ -38,7 +41,7 @@ export default function ImpactBoard() {
 
   const fetchDashboardMetrics = async () => {
     try {
-      const response = await fetch("http://localhost:8000/api/dashboard-metrics"); 
+      const response = await fetch(`${API_BASE_URL}/api/dashboard-metrics`); 
       if (response.ok) {
         const data = await response.json();
         setMetrics(data);
@@ -66,7 +69,7 @@ export default function ImpactBoard() {
     formData.append("file", file);
 
     try {
-      const response = await fetch("http://localhost:8000/api/upload", {
+      const response = await fetch(`${API_BASE_URL}/api/upload`, {
         method: "POST",
         body: formData,
       });
