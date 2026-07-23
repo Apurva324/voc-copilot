@@ -3,12 +3,12 @@ import shutil
 import uuid
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Dict
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pymongo import MongoClient
-from pydantic import BaseModel
 
 # Import the core pipeline processor from scripts/normalise.py
 from scripts.normalise import process_single_file
@@ -40,11 +40,6 @@ app.add_middleware(
 # Directory to temporarily stage uploaded files for ingestion
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-
-# Data model for auth endpoints
-class AuthRequest(BaseModel):
-    email: str
-    password: str
 
 # =====================================================================
 # BACKGROUND WORKER TASK
@@ -104,28 +99,23 @@ def root():
 
 # --- AUTHENTICATION ENDPOINTS ---
 @app.post("/api/auth/login")
-def login(credentials: AuthRequest):
-    """Handles frontend login requests."""
-    return {
-        "status": "success",
-        "message": "Login successful",
-        "token": "mock-jwt-token-12345",
-        "user": {
-            "email": credentials.email,
-            "name": credentials.email.split("@")[0]
-        }
-    }
-
 @app.post("/api/auth/register")
 @app.post("/api/auth/signup")
-def register(credentials: AuthRequest):
-    """Handles frontend registration/signup requests."""
+def handle_auth(body: Dict[str, Any]):
+    """
+    Handles auth requests dynamically regardless of payload structure 
+    (e.g., email, username, password) to prevent 422 Unprocessable Entity errors.
+    """
+    email = body.get("email") or body.get("username") or "user@zomato.com"
+    name = str(email).split("@")[0]
+
     return {
         "status": "success",
-        "message": "Account created successfully",
+        "message": "Authentication successful",
+        "token": "mock-jwt-token-12345",
         "user": {
-            "email": credentials.email,
-            "name": credentials.email.split("@")[0]
+            "email": email,
+            "name": name
         }
     }
 
