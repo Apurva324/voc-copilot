@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import time
 from pathlib import Path
 import pandas as pd
 import numpy as np
@@ -9,6 +10,7 @@ from pymongo import MongoClient
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
+
 load_dotenv()
 
 # =====================================================================
@@ -30,17 +32,7 @@ ai_client = genai.Client(api_key=AI_KEY)
 # =====================================================================
 # STAGE 1: SEMANTIC DUPLICATE DETECTION (EMBEDDING & COSINE MATH)
 # =====================================================================
-# Similarity threshold for the sentence-transformer embedding space.
-# This is NOT the same scale as character n-gram overlap. For SHORT,
-# paraphrased reviews (different words, same complaint - e.g. "refund is
-# still pending" vs "still waiting for my refund"), MiniLM cosine scores
-# often land lower than you'd expect - commonly 0.55-0.70 - while truly
-# unrelated reviews sit below 0.4.
-# DO NOT trust this number blind. Run once with DEBUG_DEDUP=1, read the
-# printed pairs + threshold sweep, and set this to just below where your
-# real duplicate pairs cluster.
 DUPLICATE_THRESHOLD = 0.65
-
 _embedding_model = None
 
 def get_embedding_model():
@@ -52,8 +44,7 @@ def get_embedding_model():
     return _embedding_model
 
 def generate_embeddings_batch(texts):
-    """Batch-encode all texts at once (not one-at-a-time in a loop).
-    Embeddings are L2-normalized, so cosine similarity == dot product."""
+    """Batch-encode all texts at once (not one-at-a-time in a loop)."""
     model = get_embedding_model()
     return model.encode(
         texts,
@@ -68,13 +59,7 @@ def calculate_cosine_similarity(vec1, vec2):
     return float(np.dot(vec1, vec2))
 
 def debug_print_pairwise_similarities(records, embeddings, top_n=25):
-    """
-    Diagnostic only - not part of the dedup decision.
-    Prints the highest-scoring review pairs so you can see the REAL
-    similarity distribution in your data and pick a threshold that
-    actually matches it, instead of guessing a number blind.
-    Enable with: DEBUG_DEDUP=1 as an environment variable.
-    """
+    """Diagnostic only - prints highest scoring review pairs."""
     n = len(embeddings)
     pairs = []
     for i in range(n):
@@ -92,17 +77,67 @@ def debug_print_pairwise_similarities(records, embeddings, top_n=25):
         print(f"  sim={sim:.3f}  |  [{i}] {text_i}")
         print(f"              |  [{j}] {text_j}")
     print("=" * 70)
-    # Quick threshold sweep so you can see how many duplicates each cutoff would produce
     for t in [0.55, 0.60, 0.65, 0.70, 0.75, 0.80]:
         count = sum(1 for sim, _, _ in pairs if sim >= t)
         print(f"  threshold {t:.2f} -> {count} pairs would match")
     print("=" * 70 + "\n")
 
 # =====================================================================
+# STAGE 2: CHUNK-BASED GEMINI ANALYSIS ENGINE
+# =====================================================================
+def analyze_chunk_with_gemini(chunk_texts):
+    """Analyzes a smaller sub-batch of reviews to respect rate and context limits."""
+    prompt = """
+    You are an AI customer analytics system for a logistics and food delivery platform.
+    Analyze the following array of CRITICAL customer reviews (1-star and 2-star ratings).
+    
+    For each review item, dynamically determine and extract:
+    1. "category": A specific operational theme classification (e.g., 'Delivery Delays', 'Refund Tracking', 'Payment Errors', 'App Crashes', 'Food Integrity'). Do not use generic answers like 'Customer Support'.
+    2. "sentiment": Analyze the raw emotional tone. Must be exactly one of: 'Positive', 'Neutral', or 'Negative'.
+    3. "churn": Mark 'High Risk' if the text explicitly or implicitly mentions switching to competitors, uninstalling the app, or never ordering again. Otherwise, mark 'Low Risk'.
+    4. "quote": Extract the most impactful exact phrase from the review text representing the core issue.
+    5. "recommendation": Provide a specific, actionable product or operational recommendation to resolve this exact issue.
+    
+    Return a valid JSON array matching the EXACT length and sequential index order of the input array.
+    Never output markdown code wrappers, explanations, or custom text outside this layout:
+    [
+      {
+        "category": "Theme Name",
+        "sentiment": "Positive/Neutral/Negative",
+        "churn": "High Risk/Low Risk",
+        "quote": "Extracted user quote text piece",
+        "recommendation": "Tailored tactical solution recommendation text."
+      }
+    ]
+    
+    Data array:
+    """ + json.dumps(chunk_texts)
+
+    try:
+        response = ai_client.models.generate_content(
+            model='gemini-3.5-flash',
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.1
+            ),
+        )
+        return json.loads(response.text)
+    except Exception as e:
+        print(f"⚠️ Gemini Chunk Analysis Warning/Failure: {e}. Generating fallback values for this batch.")
+        return [{
+            "category": "General Support Queries",
+            "sentiment": "Negative",
+            "churn": "High Risk",
+            "quote": t[:50],
+            "recommendation": "Escalate to operational support."
+        } for t in chunk_texts]
+
+# =====================================================================
 # END-TO-END PIPELINE PROCESSING
 # =====================================================================
 def process_single_file(file_path):
-    # Wipe the workspace clean for the active file upload session stream
+    # Wipe the workspace clean for active file upload session stream
     feedback_collection.delete_many({})
     metrics_collection.delete_many({})
 
@@ -114,7 +149,6 @@ def process_single_file(file_path):
             df = pd.read_csv(file_path)
             print("CSV Loaded")
         elif suffix in (".xlsx", ".xls"):
-            # requires openpyxl for .xlsx (pip install openpyxl)
             df = pd.read_excel(file_path, sheet_name=0)
             print(f"Excel Loaded ({suffix})")
         else:
@@ -125,7 +159,7 @@ def process_single_file(file_path):
         return
 
     # =====================================================================
-    # STAGE 4: IMPROVE PREPROCESSING
+    # STAGE 4: PREPROCESSING & COLUMN NORMALIZATION
     # =====================================================================
     df.columns = df.columns.str.strip()
     df = df.loc[:, ~df.columns.duplicated()]
@@ -155,7 +189,11 @@ def process_single_file(file_path):
         cleaned_records.append(row)
         
     raw_feedback_received = len(cleaned_records)
-    print("Reviews Cleaned")
+    print(f"Reviews Cleaned. Total Raw Input Count: {raw_feedback_received}")
+
+    if raw_feedback_received == 0:
+        print("⚠️ Processing complete: Zero review records found.")
+        return
 
     # =====================================================================
     # STAGE 1: SEMANTIC DEDUPLICATION ENGINE
@@ -170,10 +208,6 @@ def process_single_file(file_path):
         row["_vec"] = vec
     print("Embeddings Generated")
 
-    # --- DIAGNOSTIC: inspect the real similarity distribution ---
-    # Set DEBUG_DEDUP=1 to see the top pairwise scores and a threshold
-    # sweep. Use this to pick DUPLICATE_THRESHOLD empirically for your
-    # actual data instead of guessing a number blind.
     if os.getenv("DEBUG_DEDUP") == "1":
         debug_print_pairwise_similarities(cleaned_records, batch_embeddings)
 
@@ -183,8 +217,6 @@ def process_single_file(file_path):
         
         for saved_vec in seen_vectors:
             similarity = calculate_cosine_similarity(current_vec, saved_vec)
-            # Sentence-embedding cutoff - tuned for MiniLM's cosine scale,
-            # not the old character n-gram scale
             if similarity >= DUPLICATE_THRESHOLD:
                 is_duplicate = True
                 duplicates_removed += 1
@@ -203,50 +235,69 @@ def process_single_file(file_path):
         return
 
     # =====================================================================
-    # STAGE 2 & 5: GEMINI ANALYSIS EXCLUSIVELY VIA INDEX-BASED MAPPING
+    # STAGE 5: RATING FILTERING & SMART GEMINI TARGETING
     # =====================================================================
-    pure_texts = [r["feedback_text"] for r in unique_anchors]
-    
-    prompt = """
-    You are an AI customer analytics system for a logistics and food delivery platform.
-    Analyze the following array of UNIQUE customer reviews.
-    
-    For each review item, dynamically determine and extract:
-    1. "category": A specific operational theme classification (e.g., 'Delivery Delays', 'Refund Tracking', 'Payment Errors', 'App Crashes', 'Food Integrity'). Do not use generic answers like 'Customer Support'.
-    2. "sentiment": Analyze the raw emotional tone. Must be exactly one of: 'Positive', 'Neutral', or 'Negative'.
-    3. "churn": Mark 'High Risk' if the text explicitly or implicitly mentions switching to competitors, uninstalling the app, or never ordering again. Otherwise, mark 'Low Risk'.
-    4. "quote": Extract the most impactful exact phrase from the review text representing the core issue.
-    5. "recommendation": Provide a specific, actionable product or operational recommendation to resolve this exact issue.
-    
-    Return a valid JSON array matching the EXACT length and sequential index order of the input array.
-    Never output markdown code wrappers (like ```json), explanations, or custom text outside this layout:
-    [
-      {
-        "category": "Theme Name",
-        "sentiment": "Positive/Neutral/Negative",
-        "churn": "High Risk/Low Risk",
-        "quote": "Extracted user quote text piece",
-        "recommendation": "Tailored tactical solution recommendation text."
-      }
-    ]
-    
-    Data array:
-    """ + json.dumps(pure_texts)
+    # Filter 1-star & 2-star reviews for LLM analysis vs positive reviews
+    critical_records = []
+    non_critical_records = []
 
-    try:
-        response = ai_client.models.generate_content(
-            model='gemini-3.5-flash',
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                temperature=0.1
-            ),
-        )
-        ai_analysis = json.loads(response.text)
-        print("🚀 Gemini Dynamic Parsing Engine Analysis Complete.")
-    except Exception as e:
-        print(f"❌ Critical Pipeline Failure: Gemini API call failed. Error: {e}")
-        raise e
+    for row in unique_anchors:
+        raw_rating = row.get("rating")
+        try:
+            rating_val = int(float(raw_rating)) if pd.notna(raw_rating) and raw_rating != "" else 3
+        except (ValueError, TypeError):
+            rating_val = 3
+            
+        row["_parsed_rating"] = rating_val
+        
+        if rating_val <= 2:
+            critical_records.append(row)
+        else:
+            non_critical_records.append(row)
+
+    print(f"🎯 Rating Filter Applied: {len(critical_records)} critical reviews (1-2★) sent to AI, {len(non_critical_records)} positive/neutral reviews (3-5★) fast-tracked locally.")
+
+    # Process CRITICAL records through Gemini in micro-chunks
+    critical_texts = [r["feedback_text"] for r in critical_records]
+    ai_critical_results = []
+    chunk_size = 30
+
+    if critical_texts:
+        print(f"🚀 Processing {len(critical_texts)} critical complaints through Gemini in batches of {chunk_size}...")
+        for i in range(0, len(critical_texts), chunk_size):
+            chunk = critical_texts[i : i + chunk_size]
+            chunk_res = analyze_chunk_with_gemini(chunk)
+            ai_critical_results.extend(chunk_res)
+            print(f"  └─ Processed critical batch {i // chunk_size + 1}/{(len(critical_texts) - 1) // chunk_size + 1}")
+            time.sleep(1.0)
+
+    # Attach Gemini analysis back to critical records
+    for idx, row in enumerate(critical_records):
+        row["_meta"] = ai_critical_results[idx] if idx < len(ai_critical_results) else {
+            "category": "General Operational Issue",
+            "sentiment": "Negative",
+            "churn": "High Risk",
+            "quote": row["feedback_text"][:50],
+            "recommendation": "Investigate support escalation."
+        }
+
+    # Fast-track NON-CRITICAL (3-5 star) records locally without hitting Gemini
+    for row in non_critical_records:
+        r_val = row["_parsed_rating"]
+        sentiment_label = "Positive" if r_val >= 4 else "Neutral"
+        category_label = "Positive Feedback" if r_val >= 4 else "General Query"
+        rec_label = "Maintain current service standards." if r_val >= 4 else "Monitor feedback trends."
+        
+        row["_meta"] = {
+            "category": category_label,
+            "sentiment": sentiment_label,
+            "churn": "Low Risk",
+            "quote": row["feedback_text"][:50],
+            "recommendation": rec_label
+        }
+
+    # Recombine all records
+    processed_records = critical_records + non_critical_records
 
     # =====================================================================
     # STAGE 6, 7 & 8: DASHBOARD METRICS CALCULATION
@@ -260,12 +311,10 @@ def process_single_file(file_path):
     
     theme_map = {}
     recommendations_list = []
+    db_insert_list = []
 
-    for idx, row in enumerate(unique_anchors):
-        meta = ai_analysis[idx] if idx < len(ai_analysis) else {
-            "category": "General Support", "sentiment": "Neutral", "churn": "Low Risk", 
-            "quote": row["feedback_text"][:50], "recommendation": "Monitor stream."
-        }
+    for row in processed_records:
+        meta = row["_meta"]
         
         sent = meta.get("sentiment", "Neutral")
         if sent == "Positive": positive_reviews += 1
@@ -290,27 +339,21 @@ def process_single_file(file_path):
             }
         theme_map[theme_name]["mention_count"] += 1
 
-        # Check for float 'NaN' or missing data structures safely
-        raw_rating = row.get("rating")
-        if pd.isna(raw_rating) or raw_rating == "" or raw_rating is None:
-            rating_content = 3
-        else:
-            try:
-                rating_content = int(float(raw_rating))
-            except (ValueError, TypeError):
-                rating_content = 3
-
-        feedback_collection.insert_one({
+        db_insert_list.append({
             "feedback_text": row["feedback_text"],
             "user": str(row.get("user", "Anonymous")),
             "channel": str(row.get("channel", "Zomato Ingest")),
-            "rating": rating_content,
+            "rating": row["_parsed_rating"],
             "timestamp": str(row.get("timestamp", "Recent")),
             "category": theme_name,
             "sentiment": sent,
             "quote": meta.get("quote", row["feedback_text"]),
             "recommendation": meta.get("recommendation", "N/A")
         })
+
+    # Bulk insert feedback to MongoDB
+    if db_insert_list:
+        feedback_collection.insert_many(db_insert_list)
 
     themes_summary_list = list(theme_map.values())
     for t_name, t_data in theme_map.items():
