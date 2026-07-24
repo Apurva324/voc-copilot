@@ -166,6 +166,10 @@ def process_single_file(file_path):
     
     batch_texts = [row["feedback_text"] for row in cleaned_records]
     batch_embeddings = generate_embeddings_batch(batch_texts)
+    # DEBUG
+    print(f"Number of cleaned records: {len(cleaned_records)}")
+    print(f"Embedding shape: {batch_embeddings.shape}")
+
     for row, vec in zip(cleaned_records, batch_embeddings):
         row["_vec"] = vec
     print("Embeddings Generated")
@@ -183,6 +187,8 @@ def process_single_file(file_path):
         
         for saved_vec in seen_vectors:
             similarity = calculate_cosine_similarity(current_vec, saved_vec)
+            # debug
+            print(f"Similarity: {similarity:.4f}")
             # Sentence-embedding cutoff - tuned for MiniLM's cosine scale,
             # not the old character n-gram scale
             if similarity >= DUPLICATE_THRESHOLD:
