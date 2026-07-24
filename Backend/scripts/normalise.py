@@ -191,7 +191,14 @@ def process_single_file(file_path):
         for saved_vec in seen_vectors:
             similarity = calculate_cosine_similarity(current_vec, saved_vec)
             # debug
-            print(f"Similarity: {similarity:.4f}")
+            print("="*80)
+            print("CURRENT REVIEW:")
+            print(row["feedback_text"])
+            print("\nMATCHED AGAINST:")
+            idx = seen_vectors.index(saved_vec)
+            print(unique_anchors[idx]["feedback_text"])
+            print(f"\nSimilarity = {similarity:.4f}")
+
             # Sentence-embedding cutoff - tuned for MiniLM's cosine scale,
             # not the old character n-gram scale
             if similarity >= DUPLICATE_THRESHOLD:
