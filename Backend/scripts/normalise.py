@@ -167,8 +167,11 @@ def process_single_file(file_path):
     batch_texts = [row["feedback_text"] for row in cleaned_records]
     batch_embeddings = generate_embeddings_batch(batch_texts)
     # DEBUG
-    print(f"Number of cleaned records: {len(cleaned_records)}")
     print(f"Embedding shape: {batch_embeddings.shape}")
+    print(np.linalg.norm(batch_embeddings[0]))
+    print(np.linalg.norm(batch_embeddings[1]))
+    print(batch_embeddings[0][:10])
+    print(batch_embeddings[1][:10])
 
     for row, vec in zip(cleaned_records, batch_embeddings):
         row["_vec"] = vec
