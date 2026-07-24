@@ -61,15 +61,6 @@ interface DatasetRecord {
   format: string;
 }
 
-interface DatasetStatus {
-  status: "Processing" | "Processed" | "Failed" | string;
-  chunks_done?: number;
-  chunks_total?: number | null;
-  error_message?: string;
-}
-
-const POLL_INTERVAL_MS = 3000;
-
 export default function Dashboard() {
   // --- STATE HOOKS ---
   const [user, setUser] = useState<{ name: string; email: string } | null>(null);
@@ -81,8 +72,6 @@ export default function Dashboard() {
   const [selectedTheme, setSelectedTheme] = useState<string | null>(null);
   const [showOnlyChurn, setShowOnlyChurn] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
-  const [processingStatus, setProcessingStatus] = useState<DatasetStatus | null>(null);
-  const [processingError, setProcessingError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Risk Velocity states
@@ -187,36 +176,6 @@ export default function Dashboard() {
     return <LoginPage onLoginSuccess={(loggedInUser) => setUser(loggedInUser)} />;
   }
 
-  const pollDatasetStatus = (datasetId: string) => {
-    const intervalId = setInterval(async () => {
-      try {
-        const res = await fetch(`${API_BASE_URL}/api/datasets/${datasetId}/status`);
-        if (!res.ok) {
-          // Status endpoint blipped - keep polling rather than aborting
-          return;
-        }
-        const data: DatasetStatus = await res.json();
-        setProcessingStatus(data);
-
-        if (data.status === "Processed") {
-          clearInterval(intervalId);
-          setIsUploading(false);
-          setProcessingStatus(null);
-          await fetchDashboardData();
-          if (activeTab === "datasets") fetchDatasets();
-        } else if (data.status === "Failed") {
-          clearInterval(intervalId);
-          setIsUploading(false);
-          setProcessingStatus(null);
-          alert(`❌ Ingestion Failed: ${data.error_message || "Server processing error"}`);
-        }
-        // else still "Processing" - keep polling, progress shown via processingStatus
-      } catch (error) {
-        console.error("Status poll failed (will retry):", error);
-      }
-    }, POLL_INTERVAL_MS);
-  };
-
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -225,40 +184,24 @@ export default function Dashboard() {
     formData.append("file", file);
 
     setIsUploading(true);
-    setProcessingStatus({ status: "Processing", chunks_done: 0, chunks_total: null });
-
     try {
-      // This now returns almost instantly regardless of file size - the actual
-      // pipeline runs in the background on the server. We poll for progress
-      // instead of waiting on this single request.
       const response = await fetch(`${API_BASE_URL}/api/upload`, {
         method: "POST",
         body: formData,
       });
 
       if (response.ok) {
-        const data = await response.json();
-        if (data.dataset_id) {
-          pollDatasetStatus(data.dataset_id);
-        } else {
-          // Fallback for an older synchronous backend response
-          alert("🎉 Feedback dataset ingested and processed successfully!");
-          setIsUploading(false);
-          setProcessingStatus(null);
-          fetchDashboardData();
-          if (activeTab === "datasets") fetchDatasets();
-        }
+        alert("🎉 Feedback dataset ingested and processed successfully!");
+        fetchDashboardData();
+        if (activeTab === "datasets") fetchDatasets();
       } else {
         const errData = await response.json().catch(() => ({}));
         alert(`❌ Ingestion Rejected: ${errData.detail || "Server processing error"}`);
-        setIsUploading(false);
-        setProcessingStatus(null);
       }
     } catch (error) {
       alert("❌ Critical transmission error contacting processing engine.");
-      setIsUploading(false);
-      setProcessingStatus(null);
     } finally {
+      setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
@@ -392,11 +335,7 @@ export default function Dashboard() {
             onClick={() => fileInputRef.current?.click()}
           >
             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
-            {isUploading
-              ? (processingStatus?.chunks_total
-                  ? `Processing ${processingStatus.chunks_done}/${processingStatus.chunks_total}...`
-                  : "Processing Engine...")
-              : "Import Feed"}
+            {isUploading ? "Processing Engine..." : "Import Feed"}
           </button>
 
           <button 
@@ -411,34 +350,6 @@ export default function Dashboard() {
           </button>
         </div>
       </header>
-
-      {isUploading && (
-        <div className="bg-[#12141d] border border-blue-900/50 rounded-xl p-4 mb-6">
-          <div className="flex justify-between items-center mb-2">
-            <p className="text-[10px] font-bold text-blue-400 uppercase tracking-widest">
-              ⚙️ Pipeline Running In Background
-            </p>
-            <span className="text-[10px] font-mono text-gray-400">
-              {processingStatus?.chunks_total
-                ? `${processingStatus.chunks_done} / ${processingStatus.chunks_total} batches`
-                : "Preparing data..."}
-            </span>
-          </div>
-          <div className="w-full bg-gray-950 h-2 rounded-full overflow-hidden border border-gray-900">
-            <div
-              className="h-full bg-blue-500 transition-all duration-500"
-              style={{
-                width: processingStatus?.chunks_total
-                  ? `${Math.round(((processingStatus.chunks_done || 0) / processingStatus.chunks_total) * 100)}%`
-                  : "8%"
-              }}
-            />
-          </div>
-          <p className="text-[10px] text-gray-500 mt-2 italic">
-            Large datasets can take a while - feel free to keep working, the dashboard refreshes automatically once processing completes.
-          </p>
-        </div>
-      )}
 
       {/* --- TAB 1: MAIN DASHBOARD --- */}
       {activeTab === "dashboard" && (
