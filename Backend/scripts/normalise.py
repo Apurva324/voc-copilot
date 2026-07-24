@@ -39,7 +39,7 @@ ai_client = genai.Client(api_key=AI_KEY)
 # DO NOT trust this number blind. Run once with DEBUG_DEDUP=1, read the
 # printed pairs + threshold sweep, and set this to just below where your
 # real duplicate pairs cluster.
-DUPLICATE_THRESHOLD = 0.75
+DUPLICATE_THRESHOLD = 0.65
 
 _embedding_model = None
 
