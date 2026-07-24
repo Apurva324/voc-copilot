@@ -1,12 +1,11 @@
 import sys
 import shutil
 import os
-import uuid
 from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
 from dotenv import load_dotenv
-from fastapi import FastAPI, UploadFile, File, HTTPException, Query, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from scripts.auth import router as auth_router
 from pymongo import MongoClient
@@ -54,109 +53,50 @@ async def root():
 ALLOWED_EXTENSIONS = (".csv", ".xlsx", ".xls")
 
 # =====================================================================
-# BACKGROUND WORKER: RUNS THE FULL PIPELINE WITHOUT BLOCKING THE REQUEST
-# =====================================================================
-def run_ingestion_pipeline(dataset_id: str, file_path: str, filename: str, file_size_kb: float, suffix: str):
-    def progress_callback(chunk_idx, total_chunks):
-        datasets_collection.update_one(
-            {"dataset_id": dataset_id},
-            {"$set": {
-                "status": "Processing",
-                "chunks_done": chunk_idx,
-                "chunks_total": total_chunks
-            }}
-        )
-
-    try:
-        print(f"⚙️ [Background Worker] Starting pipeline for dataset {dataset_id}...")
-        process_single_file(file_path, progress_callback=progress_callback)
-
-        processed_count = feedback_collection.count_documents({})
-        datasets_collection.update_one(
-            {"dataset_id": dataset_id},
-            {"$set": {
-                "status": "Processed",
-                "rows_processed": processed_count,
-                "completed_at": datetime.utcnow().isoformat() + "Z"
-            }}
-        )
-        print(f"✅ [Background Worker] Dataset {dataset_id} processed successfully.")
-    except Exception as e:
-        print(f"❌ [Background Worker Error] Failed processing dataset {dataset_id}: {e}")
-        datasets_collection.update_one(
-            {"dataset_id": dataset_id},
-            {"$set": {
-                "status": "Failed",
-                "error_message": str(e),
-                "completed_at": datetime.utcnow().isoformat() + "Z"
-            }}
-        )
-
-# =====================================================================
-# INGEST FEED & DATASET REGISTRATION (NON-BLOCKING)
+# INGEST FEED & DATASET REGISTRATION
 # =====================================================================
 @app.post("/api/upload")
-async def import_feed(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+async def import_feed(file: UploadFile = File(...)):
     suffix = Path(file.filename).suffix.lower()
     if suffix not in ALLOWED_EXTENSIONS:
         raise HTTPException(status_code=400, detail="Only CSV or Excel (.xlsx, .xls) files allowed.")
-
-    dataset_id = str(uuid.uuid4())
-    file_path = UPLOAD_DIR / f"{dataset_id}_{file.filename}"
-
+    
+    file_path = UPLOAD_DIR / file.filename
     try:
+        # Save file stream to disk
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
+            
+        file_size_bytes = os.path.getsize(file_path)
+        file_size_kb = round(file_size_bytes / 1024, 2)
 
-        file_size_kb = round(os.path.getsize(file_path) / 1024, 2)
         print(f" 💾 Saved incoming file upload stream to: {file_path}")
+        
+        # Run normalization pipeline
+        process_single_file(file_path)
 
-        # Register the dataset as "Processing" immediately
+        # Count processed feedback rows for dataset log
+        processed_count = feedback_collection.count_documents({})
+        
+        # Upsert dataset metadata record
         datasets_collection.update_one(
             {"filename": file.filename},
             {
                 "$set": {
-                    "dataset_id": dataset_id,
                     "filename": file.filename,
                     "file_size_kb": file_size_kb,
                     "uploaded_at": datetime.utcnow().isoformat() + "Z",
-                    "status": "Processing",
-                    "chunks_done": 0,
-                    "chunks_total": None,
+                    "rows_processed": processed_count,
+                    "status": "Processed",
                     "format": suffix.replace(".", "").upper()
                 }
             },
             upsert=True
         )
 
-        # Hand off the actual (potentially long-running) pipeline to a background task
-        background_tasks.add_task(
-            run_ingestion_pipeline,
-            dataset_id=dataset_id,
-            file_path=str(file_path),
-            filename=file.filename,
-            file_size_kb=file_size_kb,
-            suffix=suffix
-        )
-
-        # Respond immediately so the request never times out, regardless of dataset size
-        return {
-            "status": "processing",
-            "dataset_id": dataset_id,
-            "filename": file.filename,
-            "size_kb": file_size_kb,
-            "message": "File received. Processing in the background - poll /api/datasets/{dataset_id}/status for progress."
-        }
+        return {"status": "success", "filename": file.filename, "size_kb": file_size_kb}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/datasets/{dataset_id}/status")
-async def get_dataset_status(dataset_id: str):
-    """Lightweight polling endpoint for the frontend to track long-running uploads."""
-    record = datasets_collection.find_one({"dataset_id": dataset_id}, {"_id": 0})
-    if not record:
-        raise HTTPException(status_code=404, detail="Dataset not found.")
-    return record
 
 # =====================================================================
 # FETCH FEEDBACK RECORDS & SUMMARY METRICS

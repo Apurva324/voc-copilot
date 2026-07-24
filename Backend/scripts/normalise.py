@@ -23,7 +23,7 @@ metrics_collection = db["metrics"]
 # --- DYNAMIC GEMINI CLOUD ENGINE INITIALIZATION ---
 AI_KEY = os.getenv("GEMINI_API_KEY")
 if not AI_KEY:
-    raise ValueError("Environment Error: GEMINI_API_KEY environment variable is not set!")
+    raise ValueError("❌ Environment Error: GEMINI_API_KEY environment variable is not set!")
 
 ai_client = genai.Client(api_key=AI_KEY)
 
@@ -47,7 +47,7 @@ def get_embedding_model():
     """Lazy-load the sentence-transformer model once and reuse it."""
     global _embedding_model
     if _embedding_model is None:
-        print("Loading sentence-transformer model (all-MiniLM-L6-v2)...")
+        print("📦 Loading sentence-transformer model (all-MiniLM-L6-v2)...")
         _embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
     return _embedding_model
 
@@ -101,7 +101,7 @@ def debug_print_pairwise_similarities(records, embeddings, top_n=25):
 # =====================================================================
 # END-TO-END PIPELINE PROCESSING
 # =====================================================================
-def process_single_file(file_path, progress_callback=None):
+def process_single_file(file_path):
     # Wipe the workspace clean for the active file upload session stream
     feedback_collection.delete_many({})
     metrics_collection.delete_many({})
@@ -118,99 +118,31 @@ def process_single_file(file_path, progress_callback=None):
             df = pd.read_excel(file_path, sheet_name=0)
             print(f"Excel Loaded ({suffix})")
         else:
-            error_msg = f"Unsupported file type: {suffix or 'unknown'}. Expected .csv, .xlsx, or .xls"
-            print(f" {error_msg}")
-            raise ValueError(error_msg)
-    except ValueError:
-        raise
+            print(f"❌ Unsupported file type: {suffix or 'unknown'}. Expected .csv, .xlsx, or .xls")
+            return
     except Exception as e:
-        error_msg = f"Failed to parse data file stream: {e}"
-        print(f" {error_msg}")
-        raise ValueError(error_msg)
+        print(f"❌ Failed to parse data file stream: {e}")
+        return
 
     # =====================================================================
     # STAGE 4: IMPROVE PREPROCESSING
     # =====================================================================
     df.columns = df.columns.str.strip()
     df = df.loc[:, ~df.columns.duplicated()]
-
-    # =====================================================================
-    # COLUMN MAPPING - WORD-BOUNDARY MATCHING (NOT NAIVE SUBSTRING)
-    # =====================================================================
-    # The old substring check (`"review" in "reviewer"`) incorrectly matched
-    # a "Reviewer" (person's name) column into the same bucket as the real
-    # "Review" (text) column - a real collision that shows up in real-world
-    # datasets like Kaggle's Zomato reviews export. When two columns rename
-    # to the same target, pandas silently drops one, and whichever survives
-    # (sometimes a totally unrelated column like "Time") gets treated as the
-    # actual review text - corrupting the whole pipeline without erroring.
-    #
-    # Fix: match whole words only (\bword\b) and never let a second column
-    # steal a target that's already been claimed by an earlier, better match.
-    import re
-
-    STRONG_PATTERNS = {
-        # Unambiguous signals - safe to match regardless of column order
-        "feedback_text": [r"\btext\b", r"\bfeedback\b", r"\bcomment\b", r"\bmessage\b"],
-        "rating": [r"\brating\b", r"\bstar\b", r"\bscore\b"],
-        "user": [r"\breviewer\b", r"\buser\b", r"\bcustomer\b"],
-        "timestamp": [r"\btimestamp\b", r"\bdate\b"],
-        "channel": [r"\bsource\b", r"\bchannel\b", r"\bplatform\b"],
-    }
-    WEAK_PATTERNS = {
-        # Ambiguous alone (e.g. bare "review" also appears in "review_id" and
-        # "review_date") - only used as a fallback if nothing strong claimed
-        # this target, since a strong match elsewhere always wins first.
-        "feedback_text": [r"\breview\b"],
-        "user": [r"\bname\b"],
-        "timestamp": [r"\btime\b"],
-    }
-
-    def clean_col(col):
-        # Normalize underscores/spaces so snake_case headers like
-        # "review_text" still have real word boundaries around "review"
-        # (regex \w treats "_" as a word char, so without this,
-        # "review_text" would be seen as one solid token and never match
-        # \breview\b or \btext\b at all).
-        return re.sub(r"[_\s]+", " ", str(col).lower()).strip()
-
+    
     rename_map = {}
-    assigned_targets = set()
-    id_columns = set()
-
-    # ID/identifier columns are never useful content - exclude them up front
-    # so they can never be mistaken for review text, rating, etc. just
-    # because "review_id" happens to contain the word "review".
     for col in df.columns:
-        if re.search(r"\bid\b", clean_col(col)):
-            id_columns.add(col)
-
-    def try_assign(patterns_dict):
-        for col in df.columns:
-            if col in rename_map or col in id_columns:
-                continue
-            c_clean = clean_col(col)
-            for target, patterns in patterns_dict.items():
-                if target in assigned_targets:
-                    continue
-                if any(re.search(p, c_clean) for p in patterns):
-                    rename_map[col] = target
-                    assigned_targets.add(target)
-                    print(f"🔗 Column mapping: '{col}' -> '{target}'")
-                    break
-
-    try_assign(STRONG_PATTERNS)  # unambiguous signals first, regardless of column order
-    try_assign(WEAK_PATTERNS)    # only fills in targets still missing after strong pass
-
-    unmapped_cols = [c for c in df.columns if c not in rename_map]
-    if unmapped_cols:
-        print(f"ℹ️ Columns left unmapped (kept as-is, not used in pipeline): {unmapped_cols}")
-
-    if "feedback_text" not in assigned_targets:
-        error_msg = (f"No column could be identified as the review/feedback text column. "
-                     f"Available columns: {list(df.columns)}")
-        print(f" {error_msg}")
-        raise ValueError(error_msg)
+        c_clean = str(col).lower().replace("_", "").replace(" ", "").strip()
+        if any(x in c_clean for x in ["feedback", "review", "comment", "message", "text"]):
+            rename_map[col] = "feedback_text"
+        elif any(x in c_clean for x in ["rating", "star", "score"]):
+            rename_map[col] = "rating"
+        elif any(x in c_clean for x in ["user", "name", "customer"]):
+            rename_map[col] = "user"
+        elif any(x in c_clean for x in ["timestamp", "date", "time"]):
+            rename_map[col] = "timestamp"
+        elif any(x in c_clean for x in ["source", "channel", "platform"]):
+            rename_map[col] = "channel"
 
     df = df.rename(columns=rename_map)
     
@@ -267,116 +199,54 @@ def process_single_file(file_path, progress_callback=None):
     print(f"Deduplication Complete: {unique_customer_issues} unique, {duplicates_removed} duplicates.")
 
     if not unique_anchors:
-        print(" Processing complete: Zero unique review elements left after cleaning.")
-        metrics_collection.insert_one({
-            "raw_feedback": raw_feedback_received,
-            "unique_customer_issues": 0,
-            "duplicates_removed": duplicates_removed,
-            "noise_reduction_percent": 0,
-            "positive_reviews": 0,
-            "neutral_reviews": 0,
-            "negative_reviews": 0,
-            "high_churn_customers": 0,
-            "themes": [],
-            "recommendations": []
-        })
+        print("⚠️ Processing complete: Zero unique review elements left.")
         return
 
     # =====================================================================
-    # STAGE 2 & 5: GEMINI ANALYSIS VIA CHUNKED BATCH CALLS
+    # STAGE 2 & 5: GEMINI ANALYSIS EXCLUSIVELY VIA INDEX-BASED MAPPING
     # =====================================================================
-    # A single prompt containing thousands of reviews doesn't scale - it risks
-    # hitting context/token limits, is fragile (one failure loses everything),
-    # and LLMs return more reliable structured JSON on smaller batches.
-    # Instead, we chunk the unique reviews and call Gemini once per chunk,
-    # then stitch all the results back together in original order.
-    import time
-
     pure_texts = [r["feedback_text"] for r in unique_anchors]
+    
+    prompt = """
+    You are an AI customer analytics system for a logistics and food delivery platform.
+    Analyze the following array of UNIQUE customer reviews.
+    
+    For each review item, dynamically determine and extract:
+    1. "category": A specific operational theme classification (e.g., 'Delivery Delays', 'Refund Tracking', 'Payment Errors', 'App Crashes', 'Food Integrity'). Do not use generic answers like 'Customer Support'.
+    2. "sentiment": Analyze the raw emotional tone. Must be exactly one of: 'Positive', 'Neutral', or 'Negative'.
+    3. "churn": Mark 'High Risk' if the text explicitly or implicitly mentions switching to competitors, uninstalling the app, or never ordering again. Otherwise, mark 'Low Risk'.
+    4. "quote": Extract the most impactful exact phrase from the review text representing the core issue.
+    5. "recommendation": Provide a specific, actionable product or operational recommendation to resolve this exact issue.
+    
+    Return a valid JSON array matching the EXACT length and sequential index order of the input array.
+    Never output markdown code wrappers (like ```json), explanations, or custom text outside this layout:
+    [
+      {
+        "category": "Theme Name",
+        "sentiment": "Positive/Neutral/Negative",
+        "churn": "High Risk/Low Risk",
+        "quote": "Extracted user quote text piece",
+        "recommendation": "Tailored tactical solution recommendation text."
+      }
+    ]
+    
+    Data array:
+    """ + json.dumps(pure_texts)
 
-    GEMINI_BATCH_SIZE = 15   # reviews per Gemini call - keeps prompts small & reliable
-    MAX_RETRIES = 3
-
-    def build_prompt(batch_texts):
-        return """
-        You are an AI customer analytics system for a logistics and food delivery platform.
-        Analyze the following array of UNIQUE customer reviews.
-
-        For each review item, dynamically determine and extract:
-        1. "category": A specific operational theme classification (e.g., 'Delivery Delays', 'Refund Tracking', 'Payment Errors', 'App Crashes', 'Food Integrity'). Do not use generic answers like 'Customer Support'.
-        2. "sentiment": Analyze the raw emotional tone. Must be exactly one of: 'Positive', 'Neutral', or 'Negative'.
-        3. "churn": Mark 'High Risk' if the text explicitly or implicitly mentions switching to competitors, uninstalling the app, or never ordering again. Otherwise, mark 'Low Risk'.
-        4. "quote": Extract the most impactful exact phrase from the review text representing the core issue.
-        5. "recommendation": Provide a specific, actionable product or operational recommendation to resolve this exact issue.
-
-        Return a valid JSON array matching the EXACT length and sequential index order of the input array.
-        Never output markdown code wrappers (like ```json), explanations, or custom text outside this layout:
-        [
-          {
-            "category": "Theme Name",
-            "sentiment": "Positive/Neutral/Negative",
-            "churn": "High Risk/Low Risk",
-            "quote": "Extracted user quote text piece",
-            "recommendation": "Tailored tactical solution recommendation text."
-          }
-        ]
-
-        Data array:
-        """ + json.dumps(batch_texts)
-
-    def classify_chunk(batch_texts):
-        """Call Gemini for a single chunk, with retry on transient errors.
-        Falls back to neutral placeholders for this chunk only if it never
-        succeeds, so one bad chunk can't take down the whole pipeline."""
-        for attempt in range(MAX_RETRIES):
-            try:
-                response = ai_client.models.generate_content(
-                    model='gemini-3.5-flash',
-                    contents=build_prompt(batch_texts),
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        temperature=0.1
-                    ),
-                )
-                parsed = json.loads(response.text)
-                if isinstance(parsed, list) and len(parsed) == len(batch_texts):
-                    return parsed
-                print(f"⚠️ Chunk returned mismatched length ({len(parsed)} vs {len(batch_texts)}), retrying...")
-            except Exception as e:
-                is_transient = "503" in str(e) or "UNAVAILABLE" in str(e) or "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)
-                if is_transient and attempt < MAX_RETRIES - 1:
-                    delay = 2 ** attempt
-                    print(f"⚠️ Gemini chunk call failed (attempt {attempt + 1}/{MAX_RETRIES}): {e}. Retrying in {delay}s...")
-                    time.sleep(delay)
-                    continue
-                print(f"❌ Gemini chunk call failed after {attempt + 1} attempt(s): {e}")
-                break
-
-        # Fallback for just this chunk - pipeline keeps going for everything else
-        return [
-            {
-                "category": "General Support",
-                "sentiment": "Neutral",
-                "churn": "Low Risk",
-                "quote": text[:80],
-                "recommendation": "AI analysis unavailable for this batch - review manually."
-            }
-            for text in batch_texts
-        ]
-
-    ai_analysis = []
-    total_chunks = (len(pure_texts) + GEMINI_BATCH_SIZE - 1) // GEMINI_BATCH_SIZE
-    for chunk_idx, i in enumerate(range(0, len(pure_texts), GEMINI_BATCH_SIZE), start=1):
-        batch = pure_texts[i:i + GEMINI_BATCH_SIZE]
-        print(f"🚀 Processing Gemini chunk {chunk_idx}/{total_chunks} ({len(batch)} reviews)...")
-        ai_analysis.extend(classify_chunk(batch))
-        if progress_callback:
-            try:
-                progress_callback(chunk_idx, total_chunks)
-            except Exception as cb_err:
-                print(f"⚠️ progress_callback failed (non-fatal): {cb_err}")
-
-    print(f"🚀 Gemini Dynamic Parsing Engine Analysis Complete. ({len(ai_analysis)} reviews classified across {total_chunks} chunks)")
+    try:
+        response = ai_client.models.generate_content(
+            model='gemini-3.5-flash',
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.1
+            ),
+        )
+        ai_analysis = json.loads(response.text)
+        print("🚀 Gemini Dynamic Parsing Engine Analysis Complete.")
+    except Exception as e:
+        print(f"❌ Critical Pipeline Failure: Gemini API call failed. Error: {e}")
+        raise e
 
     # =====================================================================
     # STAGE 6, 7 & 8: DASHBOARD METRICS CALCULATION
