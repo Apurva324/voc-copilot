@@ -129,20 +129,52 @@ def process_single_file(file_path, progress_callback=None):
     # =====================================================================
     df.columns = df.columns.str.strip()
     df = df.loc[:, ~df.columns.duplicated()]
-    
+
+    # =====================================================================
+    # COLUMN MAPPING - WORD-BOUNDARY MATCHING (NOT NAIVE SUBSTRING)
+    # =====================================================================
+    # The old substring check (`"review" in "reviewer"`) incorrectly matched
+    # a "Reviewer" (person's name) column into the same bucket as the real
+    # "Review" (text) column - a real collision that shows up in real-world
+    # datasets like Kaggle's Zomato reviews export. When two columns rename
+    # to the same target, pandas silently drops one, and whichever survives
+    # (sometimes a totally unrelated column like "Time") gets treated as the
+    # actual review text - corrupting the whole pipeline without erroring.
+    #
+    # Fix: match whole words only (\bword\b) and never let a second column
+    # steal a target that's already been claimed by an earlier, better match.
+    import re
+
+    COLUMN_PATTERNS = {
+        "feedback_text": [r"\bfeedback\b", r"\breview\b", r"\bcomment\b", r"\bmessage\b", r"\btext\b"],
+        "rating": [r"\brating\b", r"\bstar\b", r"\bscore\b"],
+        "user": [r"\breviewer\b", r"\buser\b", r"\bcustomer\b", r"\bname\b"],
+        "timestamp": [r"\btimestamp\b", r"\bdate\b", r"\btime\b"],
+        "channel": [r"\bsource\b", r"\bchannel\b", r"\bplatform\b"],
+    }
+
     rename_map = {}
+    assigned_targets = set()
+
     for col in df.columns:
-        c_clean = str(col).lower().replace("_", "").replace(" ", "").strip()
-        if any(x in c_clean for x in ["feedback", "review", "comment", "message", "text"]):
-            rename_map[col] = "feedback_text"
-        elif any(x in c_clean for x in ["rating", "star", "score"]):
-            rename_map[col] = "rating"
-        elif any(x in c_clean for x in ["user", "name", "customer"]):
-            rename_map[col] = "user"
-        elif any(x in c_clean for x in ["timestamp", "date", "time"]):
-            rename_map[col] = "timestamp"
-        elif any(x in c_clean for x in ["source", "channel", "platform"]):
-            rename_map[col] = "channel"
+        c_clean = str(col).lower().strip()
+        for target, patterns in COLUMN_PATTERNS.items():
+            if target in assigned_targets:
+                continue  # this target already has a column - don't overwrite it
+            if any(re.search(p, c_clean) for p in patterns):
+                rename_map[col] = target
+                assigned_targets.add(target)
+                print(f"🔗 Column mapping: '{col}' -> '{target}'")
+                break
+
+    unmapped_cols = [c for c in df.columns if c not in rename_map]
+    if unmapped_cols:
+        print(f"ℹ️ Columns left unmapped (kept as-is, not used in pipeline): {unmapped_cols}")
+
+    if "feedback_text" not in assigned_targets:
+        print(f"❌ No column could be identified as the review/feedback text column. "
+              f"Available columns: {list(df.columns)}")
+        return
 
     df = df.rename(columns=rename_map)
     
