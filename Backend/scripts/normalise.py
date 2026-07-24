@@ -23,7 +23,7 @@ metrics_collection = db["metrics"]
 # --- DYNAMIC GEMINI CLOUD ENGINE INITIALIZATION ---
 AI_KEY = os.getenv("GEMINI_API_KEY")
 if not AI_KEY:
-    raise ValueError("❌ Environment Error: GEMINI_API_KEY environment variable is not set!")
+    raise ValueError("Environment Error: GEMINI_API_KEY environment variable is not set!")
 
 ai_client = genai.Client(api_key=AI_KEY)
 
@@ -47,7 +47,7 @@ def get_embedding_model():
     """Lazy-load the sentence-transformer model once and reuse it."""
     global _embedding_model
     if _embedding_model is None:
-        print("📦 Loading sentence-transformer model (all-MiniLM-L6-v2)...")
+        print("Loading sentence-transformer model (all-MiniLM-L6-v2)...")
         _embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
     return _embedding_model
 
@@ -118,11 +118,15 @@ def process_single_file(file_path, progress_callback=None):
             df = pd.read_excel(file_path, sheet_name=0)
             print(f"Excel Loaded ({suffix})")
         else:
-            print(f"❌ Unsupported file type: {suffix or 'unknown'}. Expected .csv, .xlsx, or .xls")
-            return
+            error_msg = f"Unsupported file type: {suffix or 'unknown'}. Expected .csv, .xlsx, or .xls"
+            print(f" {error_msg}")
+            raise ValueError(error_msg)
+    except ValueError:
+        raise
     except Exception as e:
-        print(f"❌ Failed to parse data file stream: {e}")
-        return
+        error_msg = f"Failed to parse data file stream: {e}"
+        print(f" {error_msg}")
+        raise ValueError(error_msg)
 
     # =====================================================================
     # STAGE 4: IMPROVE PREPROCESSING
@@ -145,36 +149,68 @@ def process_single_file(file_path, progress_callback=None):
     # steal a target that's already been claimed by an earlier, better match.
     import re
 
-    COLUMN_PATTERNS = {
-        "feedback_text": [r"\bfeedback\b", r"\breview\b", r"\bcomment\b", r"\bmessage\b", r"\btext\b"],
+    STRONG_PATTERNS = {
+        # Unambiguous signals - safe to match regardless of column order
+        "feedback_text": [r"\btext\b", r"\bfeedback\b", r"\bcomment\b", r"\bmessage\b"],
         "rating": [r"\brating\b", r"\bstar\b", r"\bscore\b"],
-        "user": [r"\breviewer\b", r"\buser\b", r"\bcustomer\b", r"\bname\b"],
-        "timestamp": [r"\btimestamp\b", r"\bdate\b", r"\btime\b"],
+        "user": [r"\breviewer\b", r"\buser\b", r"\bcustomer\b"],
+        "timestamp": [r"\btimestamp\b", r"\bdate\b"],
         "channel": [r"\bsource\b", r"\bchannel\b", r"\bplatform\b"],
     }
+    WEAK_PATTERNS = {
+        # Ambiguous alone (e.g. bare "review" also appears in "review_id" and
+        # "review_date") - only used as a fallback if nothing strong claimed
+        # this target, since a strong match elsewhere always wins first.
+        "feedback_text": [r"\breview\b"],
+        "user": [r"\bname\b"],
+        "timestamp": [r"\btime\b"],
+    }
+
+    def clean_col(col):
+        # Normalize underscores/spaces so snake_case headers like
+        # "review_text" still have real word boundaries around "review"
+        # (regex \w treats "_" as a word char, so without this,
+        # "review_text" would be seen as one solid token and never match
+        # \breview\b or \btext\b at all).
+        return re.sub(r"[_\s]+", " ", str(col).lower()).strip()
 
     rename_map = {}
     assigned_targets = set()
+    id_columns = set()
 
+    # ID/identifier columns are never useful content - exclude them up front
+    # so they can never be mistaken for review text, rating, etc. just
+    # because "review_id" happens to contain the word "review".
     for col in df.columns:
-        c_clean = str(col).lower().strip()
-        for target, patterns in COLUMN_PATTERNS.items():
-            if target in assigned_targets:
-                continue  # this target already has a column - don't overwrite it
-            if any(re.search(p, c_clean) for p in patterns):
-                rename_map[col] = target
-                assigned_targets.add(target)
-                print(f"🔗 Column mapping: '{col}' -> '{target}'")
-                break
+        if re.search(r"\bid\b", clean_col(col)):
+            id_columns.add(col)
+
+    def try_assign(patterns_dict):
+        for col in df.columns:
+            if col in rename_map or col in id_columns:
+                continue
+            c_clean = clean_col(col)
+            for target, patterns in patterns_dict.items():
+                if target in assigned_targets:
+                    continue
+                if any(re.search(p, c_clean) for p in patterns):
+                    rename_map[col] = target
+                    assigned_targets.add(target)
+                    print(f"🔗 Column mapping: '{col}' -> '{target}'")
+                    break
+
+    try_assign(STRONG_PATTERNS)  # unambiguous signals first, regardless of column order
+    try_assign(WEAK_PATTERNS)    # only fills in targets still missing after strong pass
 
     unmapped_cols = [c for c in df.columns if c not in rename_map]
     if unmapped_cols:
         print(f"ℹ️ Columns left unmapped (kept as-is, not used in pipeline): {unmapped_cols}")
 
     if "feedback_text" not in assigned_targets:
-        print(f"❌ No column could be identified as the review/feedback text column. "
-              f"Available columns: {list(df.columns)}")
-        return
+        error_msg = (f"No column could be identified as the review/feedback text column. "
+                     f"Available columns: {list(df.columns)}")
+        print(f" {error_msg}")
+        raise ValueError(error_msg)
 
     df = df.rename(columns=rename_map)
     
@@ -231,7 +267,19 @@ def process_single_file(file_path, progress_callback=None):
     print(f"Deduplication Complete: {unique_customer_issues} unique, {duplicates_removed} duplicates.")
 
     if not unique_anchors:
-        print("⚠️ Processing complete: Zero unique review elements left.")
+        print(" Processing complete: Zero unique review elements left after cleaning.")
+        metrics_collection.insert_one({
+            "raw_feedback": raw_feedback_received,
+            "unique_customer_issues": 0,
+            "duplicates_removed": duplicates_removed,
+            "noise_reduction_percent": 0,
+            "positive_reviews": 0,
+            "neutral_reviews": 0,
+            "negative_reviews": 0,
+            "high_churn_customers": 0,
+            "themes": [],
+            "recommendations": []
+        })
         return
 
     # =====================================================================
